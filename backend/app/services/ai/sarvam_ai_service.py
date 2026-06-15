@@ -1,0 +1,594 @@
+﻿import base64
+import json
+import re
+from typing import Any, Dict, List, Optional
+
+import httpx
+
+from app.config import settings
+
+
+SARVAM_BASE_URL = "https://api.sarvam.ai"
+
+LANGUAGE_NAMES = {
+    "en": "English",
+    "ta": "Tamil",
+    "hi": "Hindi",
+    "kn": "Kannada",
+    "en-IN": "English",
+    "ta-IN": "Tamil",
+    "hi-IN": "Hindi",
+    "kn-IN": "Kannada",
+}
+
+SYSTEM_PROMPT_FARMER = """You are KrishiMitra AI, an expert agricultural assistant for Indian farmers.
+You help with crop disease diagnosis, pest control, weather-based farming advice,
+government scheme eligibility, yield optimization, and grievance guidance.
+
+Rules:
+- Always answer in the requested language.
+- Use simple farmer-friendly words.
+- Keep advice practical and actionable.
+- Consider Indian farming context, especially South Indian crops like rice, sugarcane, banana, cotton, groundnut, and vegetables.
+- When giving treatment advice, include dosage only when you are confident; otherwise ask the farmer to confirm with a local agriculture officer.
+"""
+
+
+def _language_name(language: str) -> str:
+    return LANGUAGE_NAMES.get(language, "English")
+
+
+def _language_instruction(language: str) -> str:
+    return f"Respond only in {_language_name(language)}. Do not mix languages unless the user asks."
+
+
+def _basic_sentence_format(text: str, language: str = "en") -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    if not cleaned:
+        return ""
+    if language in {"en", "en-IN"}:
+        parts = re.split(r"(?<=[.!?])\s+", cleaned)
+        formatted_parts = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            part = part[0].upper() + part[1:] if part else part
+            if part[-1] not in ".?!":
+                part += "?"
+            formatted_parts.append(part)
+        return " ".join(formatted_parts)
+    if cleaned[-1] not in ".?!?":
+        cleaned += "."
+    return cleaned
+
+
+async def format_transcript_text(text: str, language: str = "en") -> str:
+    fallback = _basic_sentence_format(text, language)
+    if not settings.SARVAM_API_KEY or not settings.VOICE_ENABLE_AI_FORMATTING:
+        return fallback
+
+    try:
+        content = await _sarvam_chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You format speech-to-text transcripts. Add only punctuation, sentence breaks, "
+                        "capitalization, and obvious spacing. Do not add facts. Do not answer the question. "
+                        f"{_language_instruction(language)}"
+                    ),
+                },
+                {"role": "user", "content": text},
+            ],
+            max_tokens=220,
+            temperature=0,
+        )
+        formatted = content.strip().strip('"')
+        return formatted or fallback
+    except Exception as error:
+        print(f"Sarvam format_transcript_text failed: {error}")
+        return fallback
+
+
+def _sarvam_headers() -> Dict[str, str]:
+    return {
+        "api-subscription-key": settings.SARVAM_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+
+def _extract_chat_content(payload: Dict[str, Any]) -> str:
+    choices = payload.get("choices") or []
+    if choices:
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            return content
+    if isinstance(payload.get("content"), str):
+        return payload["content"]
+    if isinstance(payload.get("text"), str):
+        return payload["text"]
+    return ""
+
+
+async def _sarvam_chat(
+    messages: List[Dict[str, str]],
+    max_tokens: int = 2048,
+    temperature: float = 0.4,
+) -> str:
+    if not settings.SARVAM_API_KEY:
+        raise RuntimeError("SARVAM_API_KEY is empty in backend/app/.env")
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        response = await client.post(
+            f"{SARVAM_BASE_URL}/v1/chat/completions",
+            headers=_sarvam_headers(),
+            json={
+                "model": settings.SARVAM_CHAT_MODEL,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "reasoning_effort": None,
+            },
+        )
+        response.raise_for_status()
+        content = _extract_chat_content(response.json()).strip()
+        if not content:
+            raise RuntimeError("Sarvam returned an empty chat response")
+        return content
+
+
+def _friendly_sarvam_error(error: Exception, language: str) -> str:
+    detail = str(error)
+    if "SARVAM_API_KEY" in detail:
+        messages = {
+            "ta": "Sarvam API key அமைக்கப்படவில்லை. backend/app/.env கோப்பில் SARVAM_API_KEY சேர்த்து backend ஐ restart செய்யவும்.",
+            "hi": "Sarvam API key सेट नहीं है। backend/app/.env में SARVAM_API_KEY जोड़कर backend restart करें।",
+            "kn": "Sarvam API key ಹೊಂದಿಸಲಾಗಿಲ್ಲ. backend/app/.env ನಲ್ಲಿ SARVAM_API_KEY ಸೇರಿಸಿ backend ಅನ್ನು restart ಮಾಡಿ.",
+            "en": "Sarvam API key is not configured. Add SARVAM_API_KEY in backend/app/.env and restart the backend.",
+        }
+        return messages.get(language, messages["en"])
+
+    if "401" in detail or "403" in detail or "unauthorized" in detail.lower() or "forbidden" in detail.lower():
+        messages = {
+            "ta": "Sarvam API key தவறாக உள்ளது அல்லது இந்த API க்கு அனுமதி இல்லை. key மற்றும் subscription ஐ சரிபார்த்து backend ஐ restart செய்யவும்.",
+            "hi": "Sarvam API key गलत है या इस API की अनुमति नहीं है। key/subscription जाँचें और backend restart करें।",
+            "kn": "Sarvam API key ತಪ್ಪಾಗಿದೆ ಅಥವಾ ಈ API ಗೆ ಅನುಮತಿ ಇಲ್ಲ. key/subscription ಪರಿಶೀಲಿಸಿ backend restart ಮಾಡಿ.",
+            "en": "Sarvam API key is invalid or not allowed for this API. Check the key/subscription and restart the backend.",
+        }
+        return messages.get(language, messages["en"])
+
+    messages = {
+        "ta": "Sarvam AI request தோல்வியடைந்தது. Backend terminal இல் error details பார்க்கவும்.",
+        "hi": "Sarvam AI request failed. Backend terminal में error details देखें।",
+        "kn": "Sarvam AI request ವಿಫಲವಾಯಿತು. Backend terminal ನಲ್ಲಿ error details ನೋಡಿ.",
+        "en": "Sarvam AI request failed. Check the backend terminal for details.",
+    }
+    return messages.get(language, messages["en"])
+
+
+async def diagnose_sarvam() -> Dict[str, Any]:
+    if not settings.SARVAM_API_KEY:
+        return {
+            "configured": False,
+            "ok": False,
+            "provider": "sarvam",
+            "model": settings.SARVAM_CHAT_MODEL,
+            "error_type": "missing_key",
+            "message": "SARVAM_API_KEY is empty in backend/app/.env.",
+        }
+
+    try:
+        message = await _sarvam_chat(
+            messages=[{"role": "user", "content": "Reply with OK"}],
+            max_tokens=10,
+            temperature=0,
+        )
+        return {
+            "configured": True,
+            "ok": True,
+            "provider": "sarvam",
+            "model": settings.SARVAM_CHAT_MODEL,
+            "message": message,
+        }
+    except Exception as error:
+        return {
+            "configured": True,
+            "ok": False,
+            "provider": "sarvam",
+            "model": settings.SARVAM_CHAT_MODEL,
+            "error_type": type(error).__name__,
+            "message": str(error),
+        }
+
+
+async def classify_intent(message: str) -> str:
+    if not settings.SARVAM_API_KEY:
+        return _fallback_intent(message)
+
+    try:
+        content = await _sarvam_chat(
+            messages=[
+                {
+                    "role": "system",
+                    "content": """Classify the farmer query into exactly one category:
+- disease: crop disease, pest, plant health issues
+- weather: weather, rain, pesticide spraying timing
+- scheme: government schemes, subsidies, PM-KISAN, eligibility
+- grievance: complaints, issues with government, delays
+- yield: crop yield, fertilizer, irrigation advice
+- general: everything else
+
+Reply with only one lowercase category word.""",
+                },
+                {"role": "user", "content": message},
+            ],
+            max_tokens=10,
+            temperature=0,
+        )
+        intent = content.strip().lower()
+        return intent if intent in {"disease", "weather", "scheme", "grievance", "yield", "general"} else "general"
+    except Exception as error:
+        print(f"Sarvam classify_intent failed: {error}")
+        return _fallback_intent(message)
+
+
+def _fallback_intent(message: str) -> str:
+    msg = message.lower()
+    if any(word in msg for word in ["disease", "pest", "leaf", "yellow", "rot", "fungus", "virus", "நோய்", "ರೋಗ", "बीमारी", "कीट"]):
+        return "disease"
+    if any(word in msg for word in ["weather", "rain", "spray", "wind", "மழை", "ಮಳೆ", "बारिश", "मौसम"]):
+        return "weather"
+    if any(word in msg for word in ["scheme", "kisan", "subsidy", "yojana", "திட்டம்", "ಯೋಜನೆ", "योजना", "सब्सिडी"]):
+        return "scheme"
+    if any(word in msg for word in ["complaint", "grievance", "delay", "problem", "புகார்", "ದೂರು", "शिकायत"]):
+        return "grievance"
+    if any(word in msg for word in ["yield", "fertilizer", "water", "irrigation", "விளைச்சல்", "ಇಳುವರಿ", "उपज", "खाद"]):
+        return "yield"
+    return "general"
+
+
+async def chat_with_ai(
+    message: str,
+    history: List[Dict[str, str]],
+    language: str = "ta",
+    context: Optional[Dict[str, Any]] = None,
+    channel: str = "chat",
+) -> str:
+    system = f"{SYSTEM_PROMPT_FARMER}\n\n{_language_instruction(language)}"
+    if channel in {"ivr", "voice"}:
+        system += """
+
+Spoken voice rules:
+- This answer will be spoken aloud to a farmer.
+- Keep it under 5 short, natural sentences.
+- Do not use markdown, tables, bullet symbols, or long lists.
+- Ask one simple follow-up question only if required for safety.
+- If the issue sounds urgent or uncertain, suggest contacting the local agriculture officer."""
+    if context:
+        system += f"\n\nFarmer context: {json.dumps(context, ensure_ascii=False)}"
+
+    try:
+        messages = [{"role": "system", "content": system}]
+        messages.extend(history[-10:])
+        messages.append({"role": "user", "content": message})
+        max_tokens = 500 if channel in {"ivr", "voice"} else 2048
+        return await _sarvam_chat(messages=messages, max_tokens=max_tokens, temperature=0.7)
+    except Exception as error:
+        print(f"Sarvam chat_with_ai failed: {error}")
+        return _friendly_sarvam_error(error, language)
+
+
+async def analyze_crop_image(image_path: str, crop_type: Optional[str] = None) -> Dict[str, Any]:
+    try:
+        with open(image_path, "rb") as image_file:
+            base64.b64encode(image_file.read()).decode("utf-8")
+    except Exception as error:
+        print(f"Image read failed: {error}")
+    return _mock_disease_analysis(crop_type)
+
+
+async def check_scheme_eligibility(
+    scheme_name: str,
+    state: str,
+    land_ownership: str,
+    farmer_category: str,
+    annual_income: float,
+    language: str = "ta",
+) -> Dict[str, Any]:
+    rule_result = _rule_based_scheme_check(scheme_name, state, land_ownership, farmer_category, annual_income)
+    if rule_result:
+        return rule_result
+
+    try:
+        prompt = f"""Check eligibility for this Indian agricultural scheme.
+Scheme: {scheme_name}
+State: {state}
+Land ownership: {land_ownership}
+Farmer category: {farmer_category}
+Annual income: {annual_income}
+
+Return only valid JSON with these keys:
+is_eligible (boolean), eligibility_reason, benefits, required_documents (array), alternative_schemes (array), application_steps.
+All text values must be in {_language_name(language)}."""
+        content = await _sarvam_chat(
+            messages=[
+                {"role": "system", "content": f"You are an expert on Indian agricultural government schemes. {_language_instruction(language)}"},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=2048,
+            temperature=0.2,
+        )
+        if content.startswith("```"):
+            content = content.strip("`").replace("json", "", 1).strip()
+        return json.loads(content)
+    except Exception as error:
+        print(f"Sarvam check_scheme_eligibility failed: {error}")
+        return _mock_scheme_check(scheme_name, annual_income, language)
+
+
+def _normalise(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
+
+
+def _ownership_type(land_ownership: Optional[str]) -> str:
+    ownership = _normalise(land_ownership)
+    if any(word in ownership for word in ["own", "owner", "owned", "landholder", "patta"]):
+        return "owner"
+    if any(word in ownership for word in ["tenant", "lease", "lessee", "share", "oral"]):
+        return "tenant"
+    if any(word in ownership for word in ["landless", "none", "no land"]):
+        return "landless"
+    return "unknown"
+
+
+def _eligibility_result(
+    scheme_name: str,
+    status: Optional[bool],
+    reason: str,
+    benefits: str,
+    documents: List[str],
+    steps: str,
+    alternatives: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    return {
+        "is_eligible": status,
+        "eligibility_status": "eligible" if status is True else "not_eligible" if status is False else "requires_verification",
+        "eligibility_reason": reason,
+        "benefits": benefits,
+        "required_documents": documents,
+        "alternative_schemes": alternatives or ["Kisan Credit Card", "PM Fasal Bima Yojana", "Soil Health Card Scheme"],
+        "application_steps": steps,
+        "scheme_name": scheme_name,
+    }
+
+
+def _rule_based_scheme_check(
+    scheme_name: str,
+    state: Optional[str],
+    land_ownership: Optional[str],
+    farmer_category: Optional[str],
+    annual_income: Optional[float],
+) -> Optional[Dict[str, Any]]:
+    scheme = _normalise(scheme_name)
+    state_value = _normalise(state)
+    owner_type = _ownership_type(land_ownership)
+    category = _normalise(farmer_category)
+
+    if "pm-kisan" in scheme or "pm kisan" in scheme or "samman nidhi" in scheme:
+        if owner_type in {"tenant", "landless"}:
+            return _eligibility_result(
+                "PM-KISAN",
+                False,
+                "PM-KISAN is for landholding farmer families. Tenant/sharecropper or landless entries usually do not qualify unless land is recorded in the farmer family's name.",
+                "Income support of Rs 6,000 per year in three instalments to eligible landholding farmer families.",
+                ["Aadhaar", "Land ownership record", "Bank account", "Mobile number", "e-KYC"],
+                "Verify land records and exclusion status on the official PM-KISAN portal or through the local agriculture office.",
+            )
+        if owner_type == "owner":
+            return _eligibility_result(
+                "PM-KISAN",
+                None,
+                "The farmer appears to meet the landholding requirement. Final eligibility also depends on exclusion checks such as institutional landholding, income-tax payer status, government service, pension, constitutional post, and registered professional status.",
+                "Income support of Rs 6,000 per year in three instalments to eligible landholding farmer families.",
+                ["Aadhaar", "Land ownership record", "Bank account", "Mobile number", "e-KYC"],
+                "Complete e-KYC and verify beneficiary status through PM-KISAN or the local agriculture office.",
+            )
+        return _eligibility_result(
+            "PM-KISAN",
+            None,
+            "Land ownership is required to decide PM-KISAN eligibility. Add whether the farmer owns recorded agricultural land.",
+            "Income support of Rs 6,000 per year in three instalments to eligible landholding farmer families.",
+            ["Aadhaar", "Land ownership record", "Bank account", "Mobile number", "e-KYC"],
+            "Collect land record and exclusion details, then verify on the PM-KISAN portal.",
+        )
+
+    if "fasal bima" in scheme or "pmfby" in scheme or "crop insurance" in scheme:
+        if owner_type == "landless":
+            status = False
+            reason = "PMFBY needs insurable interest in a notified crop on notified land. A landless farmer without cultivation rights or crop documents is not eligible for that plot."
+        elif owner_type in {"owner", "tenant"}:
+            status = None
+            reason = "The farmer may be eligible if the crop, area, season, and cut-off date are notified and the farmer can prove insurable interest. Tenant/sharecropper farmers need state-permitted documents."
+        else:
+            status = None
+            reason = "PMFBY eligibility depends on crop, season, notified area, and proof of cultivation. Add land/cultivation details for a better decision."
+        if state_value in {"karnataka", "gujarat"}:
+            reason += " Direct NCIP enrollment may not apply in this state; use the state enrollment portal/process."
+        return _eligibility_result(
+            "PM Fasal Bima Yojana",
+            status,
+            reason,
+            "Crop insurance cover against notified crop loss, subject to state/season notification and premium payment.",
+            ["Aadhaar", "Bank passbook", "Land record/LPC/lease or sharecropper document", "Sowing certificate or crop declaration", "Mobile number"],
+            "Check the current season notification, enroll before the cut-off date through the portal, CSC, bank, or state process.",
+        )
+
+    if "kisan credit" in scheme or "kcc" in scheme:
+        if owner_type in {"owner", "tenant"}:
+            status = None
+            reason = "The farmer is in an eligible cultivator category for KCC. Final approval depends on bank appraisal, crop plan, documents, and credit history."
+        elif owner_type == "landless":
+            status = None
+            reason = "Landless farmers may access KCC only when they have eligible allied activities or apply through SHG/JLG/tenant cultivation arrangements accepted by the bank."
+        else:
+            status = None
+            reason = "KCC supports owner cultivators, tenant farmers, oral lessees, sharecroppers, and SHG/JLG farmers. Add cultivation/tenant details for a stronger decision."
+        return _eligibility_result(
+            "Kisan Credit Card",
+            status,
+            reason,
+            "Short-term crop credit and allied activity credit through banks, subject to sanctioned limit.",
+            ["Identity proof", "Address proof", "Land/cultivation document", "Crop details", "Bank account", "Photograph"],
+            "Apply at the bank branch or Kisan Rin portal with cultivation and identity documents.",
+        )
+
+    if "soil health" in scheme:
+        return _eligibility_result(
+            "Soil Health Card Scheme",
+            True,
+            "The Soil Health Card service is meant to provide soil nutrient status and crop-wise nutrient advice for farmer holdings.",
+            "Soil test based advisory for nutrient management and fertilizer use.",
+            ["Farmer details", "Mobile number", "Holding/plot details", "Soil sample details"],
+            "Contact the agriculture department/soil testing lab or use the Soil Health Card portal process for sampling.",
+        )
+
+    if "sinchayee" in scheme or "pmksy" in scheme or "irrigation" in scheme:
+        return _eligibility_result(
+            "Pradhan Mantri Krishi Sinchayee Yojana",
+            None,
+            "Eligibility depends on the state component, local project, land/cultivation status, and irrigation asset proposed. The current form does not capture those details.",
+            "Support for irrigation access, water-use efficiency, and micro-irrigation depending on state/project rules.",
+            ["Land/cultivation document", "Aadhaar", "Bank account", "Project estimate or irrigation asset details", "State application form"],
+            "Check the district agriculture/horticulture office for the active PMKSY component and subsidy rules.",
+        )
+
+    if "enam" in scheme or "national agriculture market" in scheme:
+        return _eligibility_result(
+            "National Agriculture Market (eNAM)",
+            None,
+            "A farmer can usually register to trade through an eNAM-enabled mandi, but access depends on the crop, mandi/APMC, state process, and produce details.",
+            "Online market access, price discovery, and trading support through participating mandis.",
+            ["Farmer identity", "Bank account", "Mobile number", "Produce details", "Mandi/APMC registration if required"],
+            "Register through the eNAM portal or participating mandi and verify crop/mandi availability.",
+        )
+
+    if "krushak" in scheme or "kalia" in scheme:
+        if state_value not in {"odisha", "orissa"}:
+            return _eligibility_result(
+                "Krushak Yojana",
+                False,
+                "This is treated as an Odisha state farmer-support scheme. The entered state is outside Odisha, so the farmer should check their own state's scheme instead.",
+                "State-specific farmer livelihood or income support depending on Odisha rules.",
+                ["Aadhaar", "Bank account", "Residence proof", "Farmer/cultivator details"],
+                "Check the Odisha scheme portal/local agriculture office if the farmer is an Odisha resident.",
+            )
+        status = None if category not in {"large", "commercial"} else False
+        reason = "The farmer may qualify under Odisha state rules if they are a small/marginal cultivator, sharecropper, or covered landless agricultural household. Final checks require residence, category, and exclusion details."
+        if status is False:
+            reason = "Large/commercial farmer category may not meet the intended small/marginal or vulnerable farmer support criteria."
+        return _eligibility_result(
+            "Krushak Yojana",
+            status,
+            reason,
+            "State-specific livelihood/income assistance depending on current Odisha rules.",
+            ["Aadhaar", "Bank account", "Residence proof", "Farmer/cultivator details", "Category proof if applicable"],
+            "Verify through the Odisha scheme portal or local agriculture office.",
+        )
+
+    return None
+
+
+async def get_weather_advisory(
+    crop_type: str,
+    district: str,
+    query: str,
+    language: str = "ta",
+) -> str:
+    weather = {
+        "temperature": 31,
+        "humidity": 72,
+        "rainfall_mm": 4,
+        "wind_speed_kmh": 12,
+        "forecast_3days": "Light rain is possible in the next 2 days.",
+    }
+
+    try:
+        prompt = f"""Farmer query: {query}
+District: {district}
+Crop: {crop_type}
+Current weather: Temperature {weather['temperature']}°C, humidity {weather['humidity']}%, rainfall {weather['rainfall_mm']} mm, wind {weather['wind_speed_kmh']} km/h.
+3-day forecast: {weather['forecast_3days']}
+
+Give specific weather-based farming advice. {_language_instruction(language)}"""
+        return await _sarvam_chat(
+            messages=[
+                {"role": "system", "content": "You are an agricultural weather advisor for Indian farmers."},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=1200,
+            temperature=0.4,
+        )
+    except Exception as error:
+        print(f"Sarvam get_weather_advisory failed: {error}")
+        return _mock_weather_advisory(crop_type, district, weather, language)
+
+
+async def classify_grievance(description: str) -> str:
+    keywords = {
+        "Subsidy Delay": ["subsidy", "delayed", "payment", "money", "fund"],
+        "Crop Loss": ["crop loss", "flood", "drought", "damage", "destroyed"],
+        "Insurance": ["insurance", "claim", "premium", "coverage"],
+        "Irrigation": ["water", "canal", "irrigation", "drought", "pump"],
+        "Market Rate Issue": ["price", "market", "msp", "rate", "buyer"],
+    }
+    desc_lower = description.lower()
+    for category, words in keywords.items():
+        if any(word in desc_lower for word in words):
+            return category
+    return "Subsidy Delay"
+
+
+def _mock_weather_advisory(crop_type: str, district: str, weather: Dict[str, Any], language: str) -> str:
+    if language == "ta":
+        return f"{district} பகுதியில் தற்போது {weather['temperature']}°C வெப்பநிலை மற்றும் {weather['humidity']}% ஈரப்பதம் உள்ளது. {crop_type} பயிரில் மழை வாய்ப்பு உள்ளதால் பூச்சிக்கொல்லி தெளிப்பதை தவிர்க்கவும்."
+    if language == "hi":
+        return f"{district} में अभी तापमान {weather['temperature']}°C और आर्द्रता {weather['humidity']}% है। {crop_type} के लिए बारिश की संभावना होने पर कीटनाशक छिड़काव टालें।"
+    if language == "kn":
+        return f"{district} ಪ್ರದೇಶದಲ್ಲಿ ಈಗ {weather['temperature']}°C ತಾಪಮಾನ ಮತ್ತು {weather['humidity']}% ಆರ್ದ್ರತೆ ಇದೆ. {crop_type} ಬೆಳೆಗೆ ಮಳೆಯ ಸಾಧ್ಯತೆ ಇದ್ದರೆ ಕೀಟನಾಶಕ ಸಿಂಪಡಣೆ ತಪ್ಪಿಸಿ."
+    return f"Weather in {district}: {weather['temperature']}°C and {weather['humidity']}% humidity. For {crop_type}, avoid pesticide spraying if rain is expected."
+
+
+def _mock_disease_analysis(crop_type: Optional[str]) -> Dict[str, Any]:
+    return {
+        "disease_name": "Leaf Blight",
+        "pest_name": "Aphids",
+        "severity": "medium",
+        "confidence_score": 0.82,
+        "description": f"The {crop_type or 'crop'} shows symptoms similar to leaf blight with possible minor aphid infestation. Sarvam chat is text-only here, so this image result is a demo fallback.",
+        "treatment": "Remove affected leaves, improve airflow, avoid excess irrigation, and consult a local agriculture officer for the correct fungicide dosage.",
+        "preventive_measures": "Maintain spacing, avoid overhead irrigation, use resistant varieties, and inspect leaves weekly.",
+    }
+
+
+def _mock_scheme_check(scheme_name: str, annual_income: float, language: str) -> Dict[str, Any]:
+    annual_income = annual_income or 0
+    is_eligible = annual_income < 200000
+    if language == "ta":
+        reason = f"உங்கள் ஆண்டு வருமானம் ₹{annual_income:,.0f}. {scheme_name} திட்டத்திற்கு நீங்கள் {'தகுதி பெறுகிறீர்கள்' if is_eligible else 'தகுதி பெறவில்லை'} என்று முதற்கட்டமாக தெரிகிறது."
+    elif language == "hi":
+        reason = f"आपकी वार्षिक आय ₹{annual_income:,.0f} है। {scheme_name} के लिए आप {'योग्य हैं' if is_eligible else 'योग्य नहीं हैं'}।"
+    elif language == "kn":
+        reason = f"ನಿಮ್ಮ ವಾರ್ಷಿಕ ಆದಾಯ ₹{annual_income:,.0f}. {scheme_name} ಯೋಜನೆಗೆ ನೀವು {'ಅರ್ಹರಾಗಿದ್ದೀರಿ' if is_eligible else 'ಅರ್ಹರಲ್ಲ'} ಎಂದು ಪ್ರಾಥಮಿಕವಾಗಿ ಕಾಣುತ್ತದೆ."
+    else:
+        reason = f"Based on annual income of ₹{annual_income:,.0f}, you {'appear eligible' if is_eligible else 'do not appear eligible'} for {scheme_name}."
+
+    return {
+        "is_eligible": is_eligible,
+        "eligibility_reason": reason,
+        "benefits": "Benefits depend on the scheme rules and state implementation.",
+        "required_documents": ["Aadhaar Card", "Land Records", "Bank Account Details", "Mobile Number"],
+        "alternative_schemes": ["PM Fasal Bima Yojana", "Kisan Credit Card", "Soil Health Card Scheme"],
+        "application_steps": "Visit the nearest CSC/agriculture office or official scheme portal with documents.",
+    }
