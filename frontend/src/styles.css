@@ -28,7 +28,7 @@ button, input, select, textarea { font: inherit; }
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 280px 1fr; }
 .sidebar { position: sticky; top: 0; height: 100vh; padding: 24px; background: #102515; color: white; display: flex; flex-direction: column; gap: 24px; }
 .brand { display: flex; align-items: center; gap: 12px; }
-.brand-mark { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; background: linear-gradient(135deg, #77c96b, #2f7d32); font-weight: 800; }
+.brand-mark { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; flex-shrink: 0; background: linear-gradient(135deg, #77c96b, #2f7d32); font-weight: 800; }
 .brand h1 { margin: 0; font-size: 1.25rem; }
 .brand p, .user-card span, .muted { margin: 0; color: var(--muted); }
 .sidebar .brand p, .sidebar .user-card span { color: #b8cbb4; }
@@ -1869,6 +1869,9 @@ label {
 .compact-brand .brand-mark {
   width: 42px;
   height: 42px;
+  min-width: 42px;
+  font-size: 0.92rem;
+  letter-spacing: 0.08em;
 }
 
 .landing-grid {
@@ -1979,6 +1982,8 @@ label {
 
 .landing-auth {
   padding: 28px;
+  width: min(100%, 440px);
+  justify-self: end;
 }
 
 .hero-icon {
@@ -2757,6 +2762,19 @@ textarea {
   font-size: 0.95rem;
 }
 
+.sidebar-footer {
+  align-content: start;
+}
+
+.sidebar-action {
+  width: 100%;
+  justify-content: center;
+}
+
+.mobile-utility-bar {
+  display: none;
+}
+
 .landing-shell {
   overflow-x: hidden;
 }
@@ -2764,6 +2782,23 @@ textarea {
 .landing-nav,
 .landing-grid {
   width: min(1180px, 100%);
+}
+
+.landing-nav {
+  align-items: center;
+}
+
+.compact-brand {
+  min-width: 0;
+}
+
+.compact-brand > div:last-child {
+  min-width: 0;
+}
+
+.compact-brand h1,
+.compact-brand p {
+  overflow-wrap: anywhere;
 }
 
 .landing-copy h1 {
@@ -2816,6 +2851,8 @@ textarea {
 
   .landing-auth {
     width: min(520px, 100%);
+    justify-self: start;
+    order: -1;
   }
 }
 
@@ -2824,8 +2861,29 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .mobile-utility-bar {
+    position: fixed;
+    left: 12px;
+    right: 12px;
+    bottom: 92px;
+    z-index: 49;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .mobile-utility-button {
+    width: 100%;
+    min-width: 0;
+    box-shadow: var(--shadow-soft);
+  }
+
   .bottom-nav {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .content {
+    padding-bottom: 158px;
   }
 }
 
@@ -2834,8 +2892,14 @@ textarea {
     padding: 14px;
   }
 
+  .mobile-utility-bar {
+    bottom: 94px;
+  }
+
   .landing-nav {
     margin-bottom: 18px;
+    align-items: flex-start;
+    flex-wrap: wrap;
   }
 
   .landing-grid {
@@ -2870,5 +2934,6 @@ textarea {
 
   .landing-auth {
     padding: 20px;
+    width: 100%;
   }
 }

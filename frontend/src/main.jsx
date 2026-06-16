@@ -11,6 +11,7 @@ import DiseasePage from "./pages/DiseasePage";
 import GrievancePage from "./pages/GrievancePage";
 import HomePage from "./pages/HomePage";
 import IvrSimulatorPage from "./pages/IvrSimulatorPage";
+import IvrCallCenterPage from "./pages/IvrCallCentrePage";
 import LiveVoicePage from "./pages/LiveVoicePage";
 import LoginPage from "./pages/LoginPage";
 import OfficerPage from "./pages/OfficerPage";
@@ -65,6 +66,14 @@ function AppRoutes() {
           }
         />
         <Route path="admin/dashboard" element={<Navigate to="/admin" replace />} />
+        <Route
+          path="admin/ivr-call-center"
+          element={
+            <ProtectedRoute roles={["admin"]}>
+              <IvrCallCenterPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path="admin/ivr-simulator"
           element={

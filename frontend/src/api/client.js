@@ -1,4 +1,5 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 export class ApiError extends Error {
   constructor(message, status, payload) {
@@ -23,17 +24,24 @@ export function setToken(token) {
 
 async function parseResponse(response) {
   const contentType = response.headers.get("content-type") || "";
+
   if (contentType.includes("application/json")) {
     return response.json();
   }
-  if (contentType.includes("audio") || contentType.includes("octet-stream")) {
+
+  if (
+    contentType.includes("audio") ||
+    contentType.includes("octet-stream")
+  ) {
     return response.blob();
   }
+
   return response.text();
 }
 
 export async function request(path, options = {}) {
   const token = getToken();
+
   const headers = new Headers(options.headers || {});
 
   if (token) {
@@ -41,20 +49,34 @@ export async function request(path, options = {}) {
   }
 
   const isFormData = options.body instanceof FormData;
-  if (options.body && !isFormData && !headers.has("Content-Type")) {
+
+  if (
+    options.body &&
+    !isFormData &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...options,
     headers,
-    body: options.body && !isFormData && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body,
+    body:
+      options.body &&
+      !isFormData &&
+      typeof options.body !== "string"
+        ? JSON.stringify(options.body)
+        : options.body,
   });
 
   const payload = await parseResponse(response);
 
   if (!response.ok) {
-    const message = payload?.detail || payload?.message || `Request failed with ${response.status}`;
+    const message =
+      payload?.detail ||
+      payload?.message ||
+      `Request failed with status ${response.status}`;
+
     throw new ApiError(message, response.status, payload);
   }
 
@@ -62,51 +84,289 @@ export async function request(path, options = {}) {
 }
 
 export const api = {
-  login: (data) => request("/auth/login", { method: "POST", body: data }),
-  register: (data) => request("/auth/register", { method: "POST", body: data }),
-  me: () => request("/auth/me"),
-  updateMe: (data) => request("/auth/me", { method: "PUT", body: data }),
-  getProfile: () => request("/auth/me/profile"),
-  updateProfile: (data) => request("/auth/me/profile", { method: "PUT", body: data }),
+  // --------------------------------
+  // Generic HTTP helpers
+  // --------------------------------
 
-  chat: (data) => request("/chat", { method: "POST", body: data }),
-  chatHistory: (sessionId) => request(`/chat/history${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`),
+  get: (path) =>
+    request(path, {
+      method: "GET",
+    }),
+
+  post: (path, data) =>
+    request(path, {
+      method: "POST",
+      body: data,
+    }),
+
+  put: (path, data) =>
+    request(path, {
+      method: "PUT",
+      body: data,
+    }),
+
+  delete: (path) =>
+    request(path, {
+      method: "DELETE",
+    }),
+
+  // --------------------------------
+  // Authentication
+  // --------------------------------
+
+  login: (data) =>
+    request("/auth/login", {
+      method: "POST",
+      body: data,
+    }),
+
+  register: (data) =>
+    request("/auth/register", {
+      method: "POST",
+      body: data,
+    }),
+
+  me: () => request("/auth/me"),
+
+  updateMe: (data) =>
+    request("/auth/me", {
+      method: "PUT",
+      body: data,
+    }),
+
+  getProfile: () => request("/auth/me/profile"),
+
+  updateProfile: (data) =>
+    request("/auth/me/profile", {
+      method: "PUT",
+      body: data,
+    }),
+
+  // --------------------------------
+  // Chat
+  // --------------------------------
+
+  chat: (data) =>
+    request("/chat", {
+      method: "POST",
+      body: data,
+    }),
+
+  chatHistory: (sessionId) =>
+    request(
+      `/chat/history${
+        sessionId
+          ? `?session_id=${encodeURIComponent(sessionId)}`
+          : ""
+      }`
+    ),
+
   chatSessions: () => request("/chat/sessions"),
 
+  // --------------------------------
+  // Schemes
+  // --------------------------------
+
   schemes: () => request("/scheme/list"),
-  checkScheme: (data) => request("/scheme/check", { method: "POST", body: data }),
+
+  checkScheme: (data) =>
+    request("/scheme/check", {
+      method: "POST",
+      body: data,
+    }),
+
   schemeHistory: () => request("/scheme/history"),
 
-  createGrievance: (data) => request("/grievance/create", { method: "POST", body: data }),
-  trackGrievance: (trackingId) => request(`/grievance/track/${encodeURIComponent(trackingId)}`),
+  // --------------------------------
+  // Grievances
+  // --------------------------------
+
+  createGrievance: (data) =>
+    request("/grievance/create", {
+      method: "POST",
+      body: data,
+    }),
+
+  trackGrievance: (trackingId) =>
+    request(
+      `/grievance/track/${encodeURIComponent(trackingId)}`
+    ),
+
   myGrievances: () => request("/grievance/my"),
-  officerGrievances: () => request("/grievance/officer/all"),
-  officerStaff: () => request("/grievance/officer/staff"),
-  officerGrievance: (id) => request(`/grievance/officer/${id}`),
-  officerTrackGrievance: (trackingId) => request(`/grievance/officer/track/${encodeURIComponent(trackingId)}`),
-  updateGrievance: (id, data) => request(`/grievance/officer/${id}`, { method: "PUT", body: data }),
 
-  analyzeDisease: (formData) => request("/disease/analyze", { method: "POST", body: formData }),
-  diseaseReports: () => request("/disease/reports"),
-  diseaseHotspots: (days = 30) => request(`/disease/hotspots?days=${encodeURIComponent(days)}`),
-  weather: (location) => request(`/weather/current?location=${encodeURIComponent(location)}`),
+  officerGrievances: () =>
+    request("/grievance/officer/all"),
+
+  officerStaff: () =>
+    request("/grievance/officer/staff"),
+
+  officerGrievance: (id) =>
+    request(`/grievance/officer/${id}`),
+
+  officerTrackGrievance: (trackingId) =>
+    request(
+      `/grievance/officer/track/${encodeURIComponent(
+        trackingId
+      )}`
+    ),
+
+  updateGrievance: (id, data) =>
+    request(`/grievance/officer/${id}`, {
+      method: "PUT",
+      body: data,
+    }),
+
+  // --------------------------------
+  // Disease
+  // --------------------------------
+
+  analyzeDisease: (formData) =>
+    request("/disease/analyze", {
+      method: "POST",
+      body: formData,
+    }),
+
+  diseaseReports: () =>
+    request("/disease/reports"),
+
+  diseaseHotspots: (days = 30) =>
+    request(
+      `/disease/hotspots?days=${encodeURIComponent(days)}`
+    ),
+
+  // --------------------------------
+  // Weather
+  // --------------------------------
+
+  weather: (location) =>
+    request(
+      `/weather/current?location=${encodeURIComponent(
+        location
+      )}`
+    ),
+
   myWeather: () => request("/weather/me"),
-  officerDiseaseReports: () => request("/officer/disease-reports"),
-  officerDashboard: () => request("/officer/dashboard"),
-  ivrSessions: () => request("/ivr/sessions"),
-  ivrDemoCall: (toNumber) => request("/ivr/twilio/demo-call", { method: "POST", body: { to_number: toNumber } }),
-  ivrDemoScenarioCall: (toNumber, scenario) => request("/ivr/twilio/demo-scenario-call", { method: "POST", body: { to_number: toNumber, scenario } }),
 
-  transcribeVoice: (formData) => request("/voice/transcribe", { method: "POST", body: formData }),
-  speak: (data) => request("/voice/speak", { method: "POST", body: data }),
-  voiceConversation: (formData) => request("/voice/conversation", { method: "POST", body: formData }),
-  voiceRespond: (formData) => request("/voice/respond", { method: "POST", body: formData }),
-  voiceLiveSession: (formData) => request("/voice/live/session", { method: "POST", body: formData }),
+  // --------------------------------
+  // Officer
+  // --------------------------------
 
-  adminAnalytics: () => request("/admin/analytics"),
-  adminUsers: () => request("/admin/users"),
-  toggleUser: (id) => request(`/admin/users/${id}/toggle-active`, { method: "PUT" }),
-  updateUserRole: (id, role) => request(`/admin/users/${id}/role?role=${encodeURIComponent(role)}`, { method: "PUT" }),
-  adminSchemes: () => request("/admin/schemes"),
-  createAdminScheme: (data) => request("/admin/schemes", { method: "POST", body: data }),
+  officerDiseaseReports: () =>
+    request("/officer/disease-reports"),
+
+  officerDashboard: () =>
+    request("/officer/dashboard"),
+
+  // --------------------------------
+  // IVR
+  // --------------------------------
+
+  ivrSessions: () =>
+    request("/ivr/sessions"),
+
+  ivrOutboundStatus: () =>
+    request("/ivr/twilio/outbound-status"),
+
+  ivrDemoCall: (toNumber) =>
+    request("/ivr/twilio/demo-call", {
+      method: "POST",
+      body: {
+        to_number: toNumber,
+      },
+    }),
+
+  ivrDemoScenarioCall: (
+    toNumber,
+    scenario
+  ) =>
+    request("/ivr/twilio/demo-scenario-call", {
+      method: "POST",
+      body: {
+        to_number: toNumber,
+        scenario,
+      },
+    }),
+
+  // REAL TWILIO CALL
+  startIvrCall: (
+    toNumber,
+    language = "en",
+    purpose = "general"
+  ) =>
+    request("/ivr/twilio/call", {
+      method: "POST",
+      body: {
+        to_number: toNumber,
+        language,
+        purpose,
+      },
+    }),
+
+  // --------------------------------
+  // Voice AI
+  // --------------------------------
+
+  transcribeVoice: (formData) =>
+    request("/voice/transcribe", {
+      method: "POST",
+      body: formData,
+    }),
+
+  speak: (data) =>
+    request("/voice/speak", {
+      method: "POST",
+      body: data,
+    }),
+
+  voiceConversation: (formData) =>
+    request("/voice/conversation", {
+      method: "POST",
+      body: formData,
+    }),
+
+  voiceRespond: (formData) =>
+    request("/voice/respond", {
+      method: "POST",
+      body: formData,
+    }),
+
+  voiceLiveSession: (formData) =>
+    request("/voice/live/session", {
+      method: "POST",
+      body: formData,
+    }),
+
+  // --------------------------------
+  // Admin
+  // --------------------------------
+
+  adminAnalytics: () =>
+    request("/admin/analytics"),
+
+  adminUsers: () =>
+    request("/admin/users"),
+
+  toggleUser: (id) =>
+    request(`/admin/users/${id}/toggle-active`, {
+      method: "PUT",
+    }),
+
+  updateUserRole: (id, role) =>
+    request(
+      `/admin/users/${id}/role?role=${encodeURIComponent(
+        role
+      )}`,
+      {
+        method: "PUT",
+      }
+    ),
+
+  adminSchemes: () =>
+    request("/admin/schemes"),
+
+  createAdminScheme: (data) =>
+    request("/admin/schemes", {
+      method: "POST",
+      body: data,
+    }),
 };

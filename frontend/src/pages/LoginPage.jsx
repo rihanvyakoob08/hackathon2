@@ -39,7 +39,7 @@ export default function LoginPage() {
           </div>
         </div>
         <button className="theme-toggle compact" type="button" onClick={toggleTheme}>
-          {theme === "dark" ? "Light" : "Dark"}
+          {theme === "dark" ? "Light mode" : "Dark mode"}
         </button>
       </header>
 

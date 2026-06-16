@@ -22,7 +22,7 @@ const adminLinks = [
   { to: "/admin/users", label: "Users", icon: Users },
   { to: "/admin/schemes", label: "Schemes", icon: FileText },
   { to: "/admin/analytics", label: "Analytics", icon: BarChart3 },
-  { to: "/admin/ivr-simulator", label: "IVR", icon: PhoneCall },
+  { to: "/admin/ivr-call-center", label: "IVR Call Center", icon: PhoneCall }, 
   { to: "/admin/settings", label: "Settings", icon: UserCog },
 ];
 
@@ -63,7 +63,7 @@ export default function Layout() {
         </nav>
 
         <div className="sidebar-footer">
-          <button className="theme-toggle" type="button" onClick={toggleTheme}>
+          <button className="theme-toggle sidebar-action" type="button" onClick={toggleTheme}>
             {theme === "dark" ? "Light mode" : "Dark mode"}
           </button>
           <div className="user-card">
@@ -73,7 +73,7 @@ export default function Layout() {
               <span>{user?.role}</span>
             </div>
           </div>
-          <button className="ghost-button" onClick={handleLogout}>
+          <button className="ghost-button sidebar-action" type="button" onClick={handleLogout} aria-label="Sign out">
             <LogOut size={16} /> Logout
           </button>
         </div>
@@ -82,6 +82,15 @@ export default function Layout() {
       <main className="content">
         <Outlet />
       </main>
+
+      <div className="mobile-utility-bar" aria-label="Account actions">
+        <button className="theme-toggle mobile-utility-button" type="button" onClick={toggleTheme}>
+          {theme === "dark" ? "Light mode" : "Dark mode"}
+        </button>
+        <button className="ghost-button mobile-utility-button" type="button" onClick={handleLogout} aria-label="Sign out">
+          <LogOut size={16} /> Logout
+        </button>
+      </div>
 
       <nav className="bottom-nav" aria-label="Primary navigation">
         <NavItems links={bottomLinks} />

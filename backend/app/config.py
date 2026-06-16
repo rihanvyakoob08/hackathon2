@@ -34,7 +34,7 @@ class Settings(BaseSettings):
 
     TWILIO_ACCOUNT_SID: str = ""
     TWILIO_AUTH_TOKEN: str = ""
-    TWILIO_FROM_NUMBER: str = ""
+    TWILIO_FROM_NUMBER: str = "+15674065107"
     TWILIO_WHATSAPP_FROM: str = ""
     PUBLIC_BASE_URL: str = "http://127.0.0.1:8000"
     PUBLIC_WEBHOOK_PREFIX: str = ""

@@ -49,6 +49,7 @@ from app.services.ai.sarvam_ai_service import (
 )
 from app.services.ai.sarvam_service import translate_text
 from app.services.location_extractor import extract_location
+from app.services.weather_service import WeatherLookupError, fetch_weather
 
 logger = logging.getLogger(__name__)
 
@@ -532,6 +533,85 @@ async def _create_whatsapp_grievance(db: Session, user: User, message: str, lang
     )
 
 
+def _save_farmer_location(db: Session, user: User, location: str) -> None:
+    """Persist a resolved location to the farmer profile so future messages don't need to repeat it."""
+    try:
+        profile = user.farmer_profile
+        if profile and not profile.district:
+            profile.district = location
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+    except Exception:
+        pass  # location persistence is best-effort; never block the response
+
+
+async def _build_weather_reply(
+    *,
+    message: str,
+    location: str,
+    crop_type: str | None,
+    language: str,
+) -> str:
+    """
+    Fetch real weather data from Open-Meteo, then build a specific farmer-friendly
+    reply that directly answers the query (spray window, irrigation, forecast).
+    Falls back to get_weather_advisory only if the live fetch fails.
+    """
+    try:
+        weather = await fetch_weather(location)
+    except WeatherLookupError:
+        return await _localize_text(
+            f"Could not find weather data for {location}. Please check the spelling or try a nearby district name.",
+            language,
+        )
+    except Exception as exc:
+        logger.warning("fetch_weather failed for %s: %s — falling back to advisory", location, exc)
+        return await get_weather_advisory(
+            crop_type=crop_type or "crop",
+            district=location,
+            query=message,
+            language=language,
+        )
+
+    spray = weather["spray_window"]
+    irrigation = weather["irrigation"]
+    current = weather["current"]
+    forecast = weather["forecast_3days"]
+    resolved = weather["resolved_location"]
+
+    msg_lower = message.lower()
+    is_spray_query = any(w in msg_lower for w in ["spray", "spraying", "pesticide", "fungicide", "herbicide"])
+    is_irrigation_query = any(w in msg_lower for w in ["irrigat", "water", "drip", "flood"])
+
+    if is_spray_query:
+        decision_text = spray["decision"].replace("_", " ").title()
+        advice = (
+            f"Spray advice for {resolved}: {decision_text}.\n"
+            f"{spray['reason']}\n"
+            f"Current wind: {spray['wind_speed_kmh']} km/h, "
+            f"Rainfall now: {spray['rainfall_mm']} mm, "
+            f"Rain chance today: {spray['rain_probability_percent']}%.\n"
+            f"3-day forecast: {forecast}"
+        )
+        if crop_type:
+            advice += f"\nCrop: {crop_type}. Always check label pre-harvest interval before spraying."
+    elif is_irrigation_query:
+        decision_text = irrigation["decision"].replace("_", " ").title()
+        advice = (
+            f"Irrigation advice for {resolved}: {decision_text}.\n"
+            f"{irrigation['reason']}\n"
+            f"Forecast rain (3 days): {irrigation['forecast_rain_3d_mm']} mm.\n"
+            f"3-day forecast: {forecast}"
+        )
+    else:
+        # General weather query — use the full farmer report
+        advice = weather["farmer_report"]
+
+    return await _localize_text(advice, language)
+
+
 async def _handle_text_message(db: Session, user: User, body: str, session_id: str) -> tuple[str, str, str]:
     message = (body or "").strip()
     language = _preferred_language(user)
@@ -578,17 +658,22 @@ async def _handle_text_message(db: Session, user: User, body: str, session_id: s
             return (
                 intent,
                 await _localize_text(
-                    "Please send your district or city for weather advice. Example: Can I spray today in Chennai?",
+                    "Please send your district or city for weather advice. "
+                    "Example: Can I spray tomorrow in Coimbatore?",
                     language,
                 ),
                 language,
             )
-        return intent, await get_weather_advisory(
-            crop_type=context.get("primary_crop") or "crop",
-            district=location,
-            query=message,
+        # Persist location to profile so the farmer doesn't need to repeat it.
+        _save_farmer_location(db, user, location)
+        crop_type = context.get("primary_crop")
+        reply = await _build_weather_reply(
+            message=message,
+            location=location,
+            crop_type=crop_type,
             language=language,
-        ), language
+        )
+        return intent, reply, language
 
     if intent == "scheme":
         result = await check_scheme_eligibility(

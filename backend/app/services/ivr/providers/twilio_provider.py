@@ -6,6 +6,7 @@ import httpx
 from app.config import settings
 from app.services.ivr.ivr_models import IvrAction
 from app.services.ivr.providers.mock_provider import MockTelephonyProvider
+from app.services.ivr.twilio_outbound import normalize_phone_number, twilio_error_message
 
 
 class TwilioProvider(MockTelephonyProvider):
@@ -17,37 +18,41 @@ class TwilioProvider(MockTelephonyProvider):
 
     async def place_call(self, to_number: str, webhook_url: str) -> dict:
         self._require_config()
+        from_number = normalize_phone_number(settings.TWILIO_FROM_NUMBER, "TWILIO_FROM_NUMBER")
+        destination_number = normalize_phone_number(to_number, "Destination phone number")
         url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls.json"
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 url,
                 data={
-                    "To": to_number,
-                    "From": settings.TWILIO_FROM_NUMBER,
+                    "To": destination_number,
+                    "From": from_number,
                     "Url": webhook_url,
                     "Method": "POST",
                 },
                 auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
             )
         if response.status_code >= 400:
-            raise ValueError(f"Twilio call failed: {response.text}")
+            raise ValueError(twilio_error_message(response, from_number))
         return response.json()
 
     async def place_twiml_call(self, to_number: str, twiml: str) -> dict:
         self._require_config()
+        from_number = normalize_phone_number(settings.TWILIO_FROM_NUMBER, "TWILIO_FROM_NUMBER")
+        destination_number = normalize_phone_number(to_number, "Destination phone number")
         url = f"https://api.twilio.com/2010-04-01/Accounts/{settings.TWILIO_ACCOUNT_SID}/Calls.json"
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 url,
                 data={
-                    "To": to_number,
-                    "From": settings.TWILIO_FROM_NUMBER,
+                    "To": destination_number,
+                    "From": from_number,
                     "Twiml": twiml,
                 },
                 auth=(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN),
             )
         if response.status_code >= 400:
-            raise ValueError(f"Twilio test call failed: {response.text}")
+            raise ValueError(twilio_error_message(response, from_number))
         return response.json()
 
     def to_twiml(self, action: IvrAction, *, session_id: str, callback_url: str, public_base_url: str) -> str:
